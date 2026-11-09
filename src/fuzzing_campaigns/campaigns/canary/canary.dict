@@ -1,0 +1,7 @@
+# Tokens for the canary target. CHK is only here, not in the seeds.
+magic="FCv1 "
+put="PUT "
+del="DEL "
+chk="CHK "
+sep="; "
+eq="="

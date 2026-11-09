@@ -1,0 +1,1 @@
+lower(trim(name)) != "o\"k\n" # comment

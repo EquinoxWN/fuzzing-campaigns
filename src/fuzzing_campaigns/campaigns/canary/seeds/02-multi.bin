@@ -1,0 +1,1 @@
+FCv1 PUT user=alice; PUT role=admin; DEL user

@@ -1,0 +1,1 @@
+max(price * quantity * (1 - rate), 0) % 7

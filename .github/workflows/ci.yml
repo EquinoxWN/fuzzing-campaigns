@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the workflow can read the code and nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Every action is pinned to a full commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: make ci
+      - name: Seeds and dictionary bench (canary target)
+        run: |
+          fuzzcamp bench --targets canary --runs 6000 --seeds 0,1,2 | tee bench.md
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=canary bench::$(grep 'seeds+dict' bench.md)"
+      - name: Known-vulnerability audit
+        run: make audit
+
+  # The same harnesses under Atheris (libFuzzer); Atheris ships Linux and macOS wheels only.
+  atheris:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[atheris]"
+      - name: Short Atheris runs on the real parsers (no crash expected)
+        run: |
+          for t in kvconfig regex rules; do
+            fuzzcamp-atheris "$t" --seconds 20 --work ".tmp/atheris/$t" 2>&1 | tail -n 5
+            if ls .tmp/atheris/$t/crash-* >/dev/null 2>&1; then
+              echo "::error title=atheris $t::crash found, see the job log"; exit 1
+            fi
+          done
+          echo "::notice title=atheris::kvconfig, regex and rules ran 20 s each without a crash"
+      - name: Atheris finds the planted canary bug
+        run: |
+          fuzzcamp-atheris canary --seconds 120 --work .tmp/atheris/canary > canary.log 2>&1 || true
+          tail -n 20 canary.log
+          crash=$(ls .tmp/atheris/canary/crash-* 2>/dev/null | head -n 1)
+          if [ -z "$crash" ]; then echo "::error title=atheris canary::planted bug not found in 120 s"; exit 1; fi
+          fuzzcamp replay canary "$crash" | tee replay.txt
+          grep -q "finding: IndexError" replay.txt
+          echo "::notice title=atheris canary::$(grep -m1 -o 'stat::number_of_executed_units: [0-9]*' canary.log || echo 'crash found'); $(cat replay.txt)"
